@@ -1,4 +1,5 @@
-import yaml, os
+import yaml
+import os
 from rich import print
 from dotenv import load_dotenv
 from crewai import Agent, Task, Crew
@@ -8,10 +9,21 @@ config_list = [
     {
         'model': os.environ.get("OPENAI_MODEL_NAME", "gpt-3.5-turbo"),
         'base_url': os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"),
+        'api_key': os.environ.get("OPENAI_API_KEY")
     }
 ]
 
 def generate_crew_and_kickoff(agent_file):
+    """
+    This function generates a crew of agents and kicks off tasks based on the configuration provided in a YAML file.
+
+    Parameters:
+    agent_file (str): The path to the YAML file containing the configuration for the agents and tasks.
+
+    Returns:
+    str: The result of the last task executed by the crew.
+    """
+
     with open(agent_file, 'r') as f:
         config = yaml.safe_load(f)
 

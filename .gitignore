@@ -13,3 +13,27 @@ assets/*
 praisonAI.egg-info
 flagged
 test.yaml
+db
+praisonai_prompt.txt
+watch.sh
+docs.sh
+other
+
+.chainlit
+.files
+
+site
+# Ignore Sphinx build directory
+docs/_build/
+docs/source/
+docs/build/
+
+# Ignore Sphinx cache
+docs/_build/doctrees/
+docs/_build/doctrees/*
+docs/_build/doctrees/.doctrees
+
+# Ignore Sphinx logs and local build files
+docs/_build/.buildinfo
+docs/_build/.buildinfo/*
+docs/_build/.buildinfo/.buildinfo

@@ -8,16 +8,46 @@ from dotenv import load_dotenv
 from crewai import Agent, Task, Crew
 load_dotenv()
 import autogen
-import gradio as gr
 import argparse
 from .auto import AutoGenerator
+from .agents_generator import AgentsGenerator
+from .inbuilt_tools import *
+
+try:
+    from chainlit.cli import chainlit_run
+    CHAINLIT_AVAILABLE = True
+except ImportError:
+    CHAINLIT_AVAILABLE = False
+
+try:
+    import gradio as gr
+    GRADIO_AVAILABLE = True
+except ImportError:
+    GRADIO_AVAILABLE = False
 
 class PraisonAI:
-    def __init__(self, agent_file="agents.yaml", framework="crewai", auto=False, init=False):
+    def __init__(self, agent_file="agents.yaml", framework="", auto=False, init=False):
+        """
+        Initialize the PraisonAI object with default parameters.
+
+        Parameters:
+            agent_file (str): The default agent file to use. Defaults to "agents.yaml".
+            framework (str): The default framework to use. Defaults to "crewai".
+            auto (bool): A flag indicating whether to enable auto mode. Defaults to False.
+            init (bool): A flag indicating whether to enable initialization mode. Defaults to False.
+
+        Attributes:
+            config_list (list): A list of configuration dictionaries for the OpenAI API.
+            agent_file (str): The agent file to use.
+            framework (str): The framework to use.
+            auto (bool): A flag indicating whether to enable auto mode.
+            init (bool): A flag indicating whether to enable initialization mode.
+        """
         self.config_list = [
             {
-                'model': os.environ.get("OPENAI_MODEL_NAME", "gpt-4-turbo-preview"),
+                'model': os.environ.get("OPENAI_MODEL_NAME", "gpt-4o"),
                 'base_url': os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1"),
+                'api_key': os.environ.get("OPENAI_API_KEY")
             }
         ]
         self.agent_file = agent_file
@@ -25,93 +55,24 @@ class PraisonAI:
         self.auto = auto
         self.init = init
 
-    def generate_crew_and_kickoff(self):
-        if self.agent_file == '/app/api:app' or self.agent_file == 'api:app':
-            self.agent_file = 'agents.yaml'
-        try:
-            with open(self.agent_file, 'r') as f:
-                config = yaml.safe_load(f)
-        except FileNotFoundError:
-            print(f"File not found: {self.agent_file}")
-            return
-
-        topic = config['topic']  
-        framework = self.framework or config.get('framework')
-
-        agents = {}
-        tasks = []
-        if framework == "autogen":
-            # Load the LLM configuration dynamically
-            # print(self.config_list)
-            llm_config = {"config_list": self.config_list}
-            
-            for role, details in config['roles'].items():
-                agent_name = details['role'].format(topic=topic).replace("{topic}", topic)
-                agent_goal = details['goal'].format(topic=topic)
-                # Creating an AssistantAgent for each role dynamically
-                agents[role] = autogen.AssistantAgent(
-                    name=agent_name,
-                    llm_config=llm_config,
-                    system_message=details['backstory'].format(topic=topic)+". Must Reply \"TERMINATE\" in the end when everything is done.",
-                )
-
-                # Preparing tasks for initiate_chats
-                for task_name, task_details in details.get('tasks', {}).items():
-                    description_filled = task_details['description'].format(topic=topic)
-                    expected_output_filled = task_details['expected_output'].format(topic=topic)
-                    
-                    chat_task = {
-                        "recipient": agents[role],
-                        "message": description_filled,
-                        "summary_method": "last_msg", 
-                        # Additional fields like carryover can be added based on dependencies
-                    }
-                    tasks.append(chat_task)
-
-            # Assuming the user proxy agent is set up as per your requirements
-            user = autogen.UserProxyAgent(
-                name="User",
-                human_input_mode="NEVER",
-                is_termination_msg=lambda x: (x.get("content") or "").rstrip().rstrip(".").lower().endswith("terminate") or "TERMINATE" in (x.get("content") or ""),
-                code_execution_config={
-                    "work_dir": "coding",
-                    "use_docker": False,
-                },
-                # additional setup for the user proxy agent
-            )
-            response = user.initiate_chats(tasks)
-            result = "### Output ###\n"+response[-1].summary if hasattr(response[-1], 'summary') else ""
-        else:
-            for role, details in config['roles'].items():
-                role_filled = details['role'].format(topic=topic)
-                goal_filled = details['goal'].format(topic=topic)
-                backstory_filled = details['backstory'].format(topic=topic)
-                
-                # Assume tools are loaded and handled here as per your requirements
-                agent = Agent(role=role_filled, goal=goal_filled, backstory=backstory_filled, allow_delegation=False)
-                agents[role] = agent
-
-                for task_name, task_details in details.get('tasks', {}).items():
-                    description_filled = task_details['description'].format(topic=topic)
-                    expected_output_filled = task_details['expected_output'].format(topic=topic)
-
-                    task = Task(description=description_filled, expected_output=expected_output_filled, agent=agent)
-                    tasks.append(task)
-
-            crew = Crew(
-                agents=list(agents.values()),
-                tasks=tasks,
-                verbose=2
-            )
-
-            response = crew.kickoff()
-            result = f"### Output ###\n{response}"
-        return result
-
     def main(self):
+        """
+        The main function of the PraisonAI object. It parses the command-line arguments,
+        initializes the necessary attributes, and then calls the appropriate methods based on the
+        provided arguments.
+
+        Args:
+            self (PraisonAI): An instance of the PraisonAI class.
+    
+        Returns:
+            Any: Depending on the arguments provided, the function may return a result from the
+            AgentsGenerator, a deployment result from the CloudDeployer, or a message indicating
+            the successful creation of a file.
+        """
         args = self.parse_args()
         if args is None:
-            result = self.generate_crew_and_kickoff()
+            agents_generator = AgentsGenerator(self.agent_file, self.framework, self.config_list)
+            result = agents_generator.generate_crew_and_kickoff()
             return result
         if args.deploy:
             from .deploy import CloudDeployer
@@ -119,22 +80,16 @@ class PraisonAI:
             deployer.run_commands()
             return
         invocation_cmd = "praisonai"
-        version_string = f"praisonAI version {__version__}"
+        version_string = f"PraisonAI version {__version__}"
         
-        if args.framework:
-            self.framework = args.framework
+        self.framework = args.framework or self.framework 
         
-        ui = args.ui
-
         if args.agent_file:
-            if args.agent_file == "tests.test": # Argument used for testing purposes
-                full_path = os.path.abspath("agents.yaml")
+            if args.agent_file.startswith("tests.test"): # Argument used for testing purposes. eg: python -m unittest tests.test 
+                print("test")
             else:
-                full_path = os.path.abspath(args.agent_file)
-            self.agent_file = full_path
-        else:
-            full_path = os.path.abspath(self.agent_file)
-            self.filename = full_path
+                self.agent_file = args.agent_file
+        
         
         if args.auto or args.init:
             temp_topic = ' '.join(args.auto) if args.auto else ' '.join(args.init)
@@ -143,59 +98,141 @@ class PraisonAI:
             self.topic = self.auto
             
         if args.auto or self.auto:
-            self.filename = "test.yaml"
-            generator = AutoGenerator(topic=self.topic , framework=self.framework)
+            self.agent_file = "test.yaml"
+            generator = AutoGenerator(topic=self.topic , framework=self.framework, agent_file=self.agent_file)
             self.agent_file = generator.generate()
-            result = self.generate_crew_and_kickoff()
+            agents_generator = AgentsGenerator(self.agent_file, self.framework, self.config_list)
+            result = agents_generator.generate_crew_and_kickoff()
             return result
         elif args.init or self.init:
-            self.filename = "agents.yaml"
-            generator = AutoGenerator(topic=self.topic , framework=self.framework, filename=self.filename)
+            self.agent_file = "agents.yaml"
+            generator = AutoGenerator(topic=self.topic , framework=self.framework, agent_file=self.agent_file)
             self.agent_file = generator.generate()
             print("File {} created successfully".format(self.agent_file))
             return "File {} created successfully".format(self.agent_file)
         
-        if ui:
-            self.create_gradio_interface()
+        if args.ui:
+            if args.ui == "gradio":
+                self.create_gradio_interface()
+            elif args.ui == "chainlit":
+                self.create_chainlit_interface()
+            else:
+                # Modify below code to allow default ui
+                agents_generator = AgentsGenerator(self.agent_file, self.framework, self.config_list)
+                result = agents_generator.generate_crew_and_kickoff()
+                return result
         else:
-            result = self.generate_crew_and_kickoff()
+            agents_generator = AgentsGenerator(self.agent_file, self.framework, self.config_list)
+            result = agents_generator.generate_crew_and_kickoff()
             return result
             
     def parse_args(self):
+        """
+        Parse the command-line arguments for the PraisonAI CLI.
+
+        Args:
+            self (PraisonAI): An instance of the PraisonAI class.
+
+        Returns:
+            argparse.Namespace: An object containing the parsed command-line arguments.
+
+        Raises:
+            argparse.ArgumentError: If the arguments provided are invalid.
+
+        Example:
+            >>> args = praison_ai.parse_args()
+            >>> print(args.agent_file)  # Output: 'agents.yaml'
+        """
         parser = argparse.ArgumentParser(prog="praisonai", description="praisonAI command-line interface")
-        parser.add_argument("--framework", choices=["crewai", "autogen"], default="crewai", help="Specify the framework")
-        parser.add_argument("--ui", action="store_true", help="Enable UI mode")
+        parser.add_argument("--framework", choices=["crewai", "autogen"], help="Specify the framework")
+        parser.add_argument("--ui", choices=["chainlit", "gradio"], help="Specify the UI framework (gradio or chainlit).")
         parser.add_argument("--auto", nargs=argparse.REMAINDER, help="Enable auto mode and pass arguments for it")
         parser.add_argument("--init", nargs=argparse.REMAINDER, help="Enable auto mode and pass arguments for it")
         parser.add_argument("agent_file", nargs="?", help="Specify the agent file")
         parser.add_argument("--deploy", action="store_true", help="Deploy the application")  # New argument
-
         args, unknown_args = parser.parse_known_args()
 
         if unknown_args and unknown_args[0] == '-b' and unknown_args[1] == 'api:app':
             args.agent_file = 'agents.yaml'
         if args.agent_file == 'api:app' or args.agent_file == '/app/api:app':
             args.agent_file = 'agents.yaml'
+        if args.agent_file == 'ui':
+            args.ui = 'chainlit'
 
         return args
 
     def create_gradio_interface(self):
-        def generate_crew_and_kickoff_interface(auto_args, framework):
-            self.framework = framework
-            self.agent_file = "test.yaml"
-            generator = AutoGenerator(topic=auto_args , framework=self.framework)
-            self.agent_file = generator.generate()
-            result = self.generate_crew_and_kickoff()
-            return result
+        """
+        Create a Gradio interface for generating agents and performing tasks.
 
-        gr.Interface(
-            fn=generate_crew_and_kickoff_interface,
-            inputs=[gr.Textbox(lines=2, label="Auto Args"), gr.Dropdown(choices=["crewai", "autogen"], label="Framework")],
-            outputs="textbox",
-            title="Praison AI Studio",
-            description="Create Agents and perform tasks",
-            theme="default"
-        ).launch()
+        Args:
+            self (PraisonAI): An instance of the PraisonAI class.
+
+        Returns:
+            None: This method does not return any value. It launches the Gradio interface.
+
+        Raises:
+            None: This method does not raise any exceptions.
+
+        Example:
+            >>> praison_ai.create_gradio_interface()
+        """
+        if GRADIO_AVAILABLE:
+            def generate_crew_and_kickoff_interface(auto_args, framework):
+                """
+                Generate a crew and kick off tasks based on the provided auto arguments and framework.
+
+                Args:
+                    auto_args (list): Topic.
+                    framework (str): The framework to use for generating agents.
+
+                Returns:
+                    str: A string representing the result of generating the crew and kicking off tasks.
+
+                Raises:
+                    None: This method does not raise any exceptions.
+
+                Example:
+                    >>> result = generate_crew_and_kickoff_interface("Create a movie about Cat in Mars", "crewai")
+                    >>> print(result)
+                """
+                self.framework = framework
+                self.agent_file = "test.yaml"
+                generator = AutoGenerator(topic=auto_args , framework=self.framework)
+                self.agent_file = generator.generate()
+                agents_generator = AgentsGenerator(self.agent_file, self.framework, self.config_list)
+                result = agents_generator.generate_crew_and_kickoff()
+                return result
+
+            gr.Interface(
+                fn=generate_crew_and_kickoff_interface,
+                inputs=[gr.Textbox(lines=2, label="Auto Args"), gr.Dropdown(choices=["crewai", "autogen"], label="Framework")],
+                outputs="textbox",
+                title="Praison AI Studio",
+                description="Create Agents and perform tasks",
+                theme="default"
+            ).launch()
+        else:
+            print("ERROR: Gradio is not installed. Please install it with 'pip install gradio' to use this feature.") 
+        
+    def create_chainlit_interface(self):
+        """
+        Create a Chainlit interface for generating agents and performing tasks.
+
+        This function sets up a Chainlit application that listens for messages.
+        When a message is received, it runs PraisonAI with the provided message as the topic.
+        The generated agents are then used to perform tasks.
+
+        Returns:
+            None: This function does not return any value. It starts the Chainlit application.
+        """
+        if CHAINLIT_AVAILABLE:
+            os.environ["CHAINLIT_PORT"] = "8082"  
+            import praisonai
+            chainlit_ui_path = os.path.join(os.path.dirname(praisonai.__file__), 'chainlit_ui.py')
+            chainlit_run([chainlit_ui_path])
+        else:
+            print("ERROR: Chainlit is not installed. Please install it with 'pip install chainlit' to use the UI.")        
 
 if __name__ == "__main__":
     praison_ai = PraisonAI()
